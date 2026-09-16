@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+  <!-- HDFS warehouse location -->
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>/warehouse/tablespace/managed/hive</value>
+  </property>
+  <property>
+    <name>hive.metastore.uris</name>
+    <value>thrift://hive-metastore:9083</value>
+  </property>
+
+  <!-- Use Hudi's CombineHiveInputFormat wrapper: the default
+       CombineHiveInputFormat combines splits WITHOUT Hudi's file-slice
+       filtering, so queries that fall back to local MR (e.g. ORDER BY)
+       return rows from EVERY historical file version (duplicates).
+       This wrapper behaves identically to the default for non-Hudi tables. -->
+  <property>
+    <name>hive.input.format</name>
+    <value>org.apache.hudi.hadoop.hive.HoodieCombineHiveInputFormat</value>
+  </property>
+
+  <!-- PostgreSQL backed metastore -->
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:postgresql://postgres:5432/metastore</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>org.postgresql.Driver</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>hive</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionPassword</name>
+    <value>__HIVE_DB_PASS__</value>
+  </property>
+
+  <property>
+    <name>hive.metastore.schema.verification</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>datanucleus.schema.autoCreateAll</name>
+    <value>true</value>
+  </property>
+
+  <!-- HiveServer2 -->
+  <property>
+    <name>hive.server2.thrift.port</name>
+    <value>10000</value>
+  </property>
+  <property>
+    <name>hive.server2.thrift.bind.host</name>
+    <value>0.0.0.0</value>
+  </property>
+  <property>
+    <name>hive.server2.enable.doAs</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hive.metastore.event.db.notification.api.auth</name>
+    <value>false</value>
+  </property>
+
+  <!-- Let clients (Spark) create tables / write into the warehouse dir -->
+  <property>
+    <name>hive.metastore.execute.setugi</name>
+    <value>true</value>
+  </property>
+</configuration>

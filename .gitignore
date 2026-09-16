@@ -1,0 +1,16 @@
+# ---- Build artifacts ----
+*.class
+target/
+.docker/
+
+# ---- Env / secrets ----
+.env
+
+# ---- Logs / data ----
+logs/
+*.log
+data/
+
+# ---- OS ----
+.DS_Store
+hive/hudi-hadoop-mr-bundle-0.14.1.jar

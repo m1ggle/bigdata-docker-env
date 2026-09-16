@@ -1,0 +1,13 @@
+# 强制 shell 脚本与 Dockerfile 使用 LF 行尾，避免在 Windows(Git autocrlf) 下
+# 把 CRLF 带进容器，导致 "exec format error" / "no such file or directory"。
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.conf          text eol=lf
+*.xml           text eol=lf
+*.sql           text eol=lf
+*.env           text eol=lf
+.env            text eol=lf
+*.ps1           text eol=crlf
+*.bat           text eol=crlf

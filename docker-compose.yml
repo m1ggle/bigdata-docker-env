@@ -1,0 +1,282 @@
+# =============================================================================
+#  大数据开发环境 - 一键 Docker Compose 编排
+#  组件: Hadoop(HDFS+YARN) / Hive / Spark(+Hudi) / Flink / Kafka(KRaft) / Postgres
+#  用法: cp .env.example .env && docker compose up -d --build
+# =============================================================================
+name: bigdata-dev
+
+x-hadoop-common: &hadoop-common
+  build:
+    context: ./hadoop
+  image: bigdata/hadoop:3.3.6
+  networks: [bigdata]
+  restart: unless-stopped
+
+services:
+  # ----------------------------- Hadoop HDFS ---------------------------------
+  namenode:
+    <<: *hadoop-common
+    container_name: namenode
+    hostname: namenode
+    environment:
+      HADOOP_ROLE: namenode
+    ports:
+      - "9870:9870"   # NameNode Web UI
+      - "9000:9000"   # HDFS RPC
+    volumes:
+      - namenode-data:/opt/hadoop/data/name
+      - ./init:/init:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 5 http://localhost:9870 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  datanode:
+    <<: *hadoop-common
+    container_name: datanode
+    hostname: datanode
+    environment:
+      HADOOP_ROLE: datanode
+    ports:
+      - "9864:9864"   # DataNode Web UI
+    volumes:
+      - datanode-data:/opt/hadoop/data/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+
+  # ----------------------------- Hadoop YARN ---------------------------------
+  resourcemanager:
+    <<: *hadoop-common
+    container_name: resourcemanager
+    hostname: resourcemanager
+    environment:
+      HADOOP_ROLE: resourcemanager
+    ports:
+      - "8088:8088"   # YARN ResourceManager Web UI
+    depends_on:
+      namenode:
+        condition: service_healthy
+
+  nodemanager:
+    <<: *hadoop-common
+    container_name: nodemanager
+    hostname: nodemanager
+    environment:
+      HADOOP_ROLE: nodemanager
+    ports:
+      - "8042:8042"   # NodeManager Web UI
+    depends_on:
+      - resourcemanager
+
+  # ------------------- One-shot HDFS directory initialiser -------------------
+  # Creates all base HDFS dirs (e.g. /spark-logs) then exits 0. Spark/Hive wait
+  # for its successful completion so they never start against a missing dir.
+  hdfs-init:
+    <<: *hadoop-common
+    container_name: hdfs-init
+    environment:
+      HADOOP_ROLE: init
+    depends_on:
+      namenode:
+        condition: service_healthy
+    restart: "no"
+
+  # ------------------------- Hive (Metastore + HS2) --------------------------
+  hive-metastore:
+    build:
+      context: ./hive
+    image: bigdata/hive:3.1.3
+    container_name: hive-metastore
+    hostname: hive-metastore
+    environment:
+      HIVE_ROLE: metastore
+      HIVE_DB_PASS: ${HIVE_DB_PASS}
+    ports:
+      - "9083:9083"
+    networks: [bigdata]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      namenode:
+        condition: service_healthy
+      hdfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  hive-server:
+    build:
+      context: ./hive
+    image: bigdata/hive:3.1.3
+    container_name: hive-server
+    hostname: hive-server
+    environment:
+      HIVE_ROLE: hiveserver2
+      HIVE_DB_PASS: ${HIVE_DB_PASS}
+    ports:
+      - "10000:10000"  # HiveServer2 JDBC/Beeline
+      - "10002:10002"  # HiveServer2 Web UI
+    networks: [bigdata]
+    depends_on:
+      - hive-metastore
+    restart: unless-stopped
+
+  # ----------------------------- PostgreSQL ----------------------------------
+  postgres:
+    image: docker.1ms.run/postgres:15
+    container_name: postgres
+    hostname: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      HIVE_DB_PASS: ${HIVE_DB_PASS}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init/00-postgres-init.sh:/docker-entrypoint-initdb.d/00-init.sh:ro
+    networks: [bigdata]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ------------------------------- Spark -------------------------------------
+  spark-master:
+    build:
+      context: ./spark
+    image: bigdata/spark:3.4.3
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      SPARK_ROLE: master
+    ports:
+      - "8080:8080"   # Spark Master Web UI
+      - "7077:7077"   # Spark Master RPC
+    networks: [bigdata]
+    depends_on:
+      namenode:
+        condition: service_healthy
+      hdfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  spark-worker:
+    build:
+      context: ./spark
+    image: bigdata/spark:3.4.3
+    container_name: spark-worker
+    hostname: spark-worker
+    environment:
+      SPARK_ROLE: worker
+    ports:
+      - "8081:8081"   # Spark Worker Web UI
+    networks: [bigdata]
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+
+  spark-history:
+    build:
+      context: ./spark
+    image: bigdata/spark:3.4.3
+    container_name: spark-history
+    hostname: spark-history
+    environment:
+      SPARK_ROLE: history
+    ports:
+      - "18080:18080" # Spark History Server Web UI
+    networks: [bigdata]
+    depends_on:
+      spark-master:
+        condition: service_started
+      hdfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ------------------------------- Flink -------------------------------------
+  flink-jobmanager:
+    image: docker.1ms.run/flink:1.18.1-scala_2.12-java8
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.memory.process.size: 1600m
+    ports:
+      - "8082:8081"   # Flink Web UI (host 8082 -> container 8081)
+    volumes:
+      - ./flink/conf/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+    networks: [bigdata]
+    restart: unless-stopped
+
+  flink-taskmanager:
+    image: docker.1ms.run/flink:1.18.1-scala_2.12-java8
+    container_name: flink-taskmanager
+    hostname: flink-taskmanager
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        taskmanager.memory.process.size: 1728m
+    volumes:
+      - ./flink/conf/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+    networks: [bigdata]
+    depends_on:
+      - flink-jobmanager
+    restart: unless-stopped
+
+  # ------------------------------- Kafka (KRaft) -----------------------------
+  kafka:
+    image: docker.1ms.run/apache/kafka:3.7.0
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"   # client listener
+      - "9093:9093"   # controller listener (internal, exposed for debugging)
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+      - ./init:/init:ro
+    networks: [bigdata]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+networks:
+  bigdata:
+    # 显式命名避免 compose 默认 "<project>_<network>" 生成带下划线的名字。
+    # 下划线会进入容器 DNS 反向解析(FQDN)，Hive/Java URI 解析主机名时直接报
+    # URISyntaxException，导致 HiveServer2 起不来。
+    name: bigdata-net
+    driver: bridge
+
+volumes:
+  namenode-data:
+  datanode-data:
+  postgres-data:
+  kafka-data:

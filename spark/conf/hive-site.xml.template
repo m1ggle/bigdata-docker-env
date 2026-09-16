@@ -1,0 +1,8 @@
+#
+# Hive integration for Spark SQL.
+# Copy this file to conf/hive-site.xml when you want spark-sql / thrift server
+# to talk directly to the Hive metastore (it overrides the empty default).
+#
+# NOTE: the compose file copies this at runtime; kept as a template here so the
+# DB password can be injected from env without committing secrets.
+#

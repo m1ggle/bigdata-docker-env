@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  Spark SQL -> Hive Metastore 集成配置。
+  在 docker-compose 中通过 volume 挂载到 /opt/spark/conf/hive-site.xml
+  即可让 spark-sql / thrift server 直接读写 Hive 元数据。
+-->
+<configuration>
+  <property>
+    <name>hive.metastore.uris</name>
+    <value>thrift://hive-metastore:9083</value>
+  </property>
+  <property>
+    <name>spark.sql.catalogImplementation</name>
+    <value>hive</value>
+  </property>
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>/warehouse/tablespace/managed/hive</value>
+  </property>
+</configuration>
