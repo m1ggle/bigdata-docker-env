@@ -1,6 +1,6 @@
 # =============================================================================
 #  大数据开发环境 - 一键 Docker Compose 编排
-#  组件: Hadoop(HDFS+YARN) / Hive / Spark(+Hudi) / Flink / Kafka(KRaft) / Postgres
+#  组件: Hadoop(HDFS+YARN) / Hive / Spark(+Hudi) / Flink / Kafka(KRaft) / Postgres / DolphinScheduler
 #  用法: cp .env.example .env && docker compose up -d --build
 # =============================================================================
 name: bigdata-dev
@@ -265,6 +265,77 @@ services:
       interval: 15s
       timeout: 10s
       retries: 10
+    restart: unless-stopped
+
+  # --------------------- DolphinScheduler 3.2.2 (Standalone) -----------------
+  # 一次性容器: 在已有的 postgres 上幂等地创建 dolphinscheduler 角色和库。
+  # 不复用 00-postgres-init.sh, 因为那份脚本只在数据卷首次初始化时执行,
+  # 老环境加 DS 时必须能在已运行的 PG 上补建库。
+  ds-db-init:
+    image: docker.1ms.run/postgres:15
+    container_name: ds-db-init
+    entrypoint: ["/bin/bash", "/init/30-dolphinscheduler-db.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      DS_DB_PASS: ${DS_DB_PASS}
+    volumes:
+      - ./init:/init:ro
+    networks: [bigdata]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # 一次性容器: 官方方式初始化 DS 元数据表结构 (upgrade-schema.sh, 幂等)
+  ds-schema-init:
+    image: docker.1ms.run/apache/dolphinscheduler-tools:3.2.2
+    container_name: ds-schema-init
+    command: ["tools/bin/upgrade-schema.sh"]
+    environment:
+      DATABASE: postgresql
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dolphinscheduler
+      SPRING_DATASOURCE_USERNAME: dolphinscheduler
+      SPRING_DATASOURCE_PASSWORD: ${DS_DB_PASS}
+      SPRING_JACKSON_TIME_ZONE: UTC
+    networks: [bigdata]
+    depends_on:
+      ds-db-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  dolphinscheduler:
+    build:
+      context: ./dolphinscheduler
+    image: bigdata/dolphinscheduler:3.2.2
+    container_name: dolphinscheduler
+    hostname: dolphinscheduler
+    environment:
+      # standalone 镜像默认 H2 profile, 切到内置的 postgresql profile;
+      # SPRING_DATASOURCE_* 经 Spring Boot 松散绑定覆盖 profile 里的默认值
+      SPRING_PROFILES_ACTIVE: postgresql
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/dolphinscheduler
+      SPRING_DATASOURCE_USERNAME: dolphinscheduler
+      SPRING_DATASOURCE_PASSWORD: ${DS_DB_PASS}
+    ports:
+      - "12345:12345" # DS Web UI (/dolphinscheduler/ui)
+      - "25333:25333" # Worker 网关(监控/远程任务调试用)
+    volumes:
+      # 让 Shell 任务能通过 `docker exec <容器> ...` 调度本环境的
+      # Spark / Flink / Hive 作业(镜像内已装 docker CLI)
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [bigdata]
+    depends_on:
+      ds-schema-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c 'echo > /dev/tcp/localhost/12345' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
     restart: unless-stopped
 
 networks:

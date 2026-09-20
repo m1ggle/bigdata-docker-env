@@ -3,7 +3,7 @@
 # =============================================================================
 COMPOSE := docker compose
 
-.PHONY: help up down clean ps logs init build restart hdfs-test hive-test spark-test flink-test kafka-test
+.PHONY: help up down clean ps logs init build restart hdfs-test hive-test spark-test flink-test kafka-test ds-test
 
 help:
 	@echo "可用命令:"
@@ -20,6 +20,7 @@ help:
 	@echo "  make spark-test 测试 Spark + Hudi 示例"
 	@echo "  make flink-test 测试 Flink"
 	@echo "  make kafka-test 列出 Kafka topics"
+	@echo "  make ds-test    测试 DolphinScheduler Web UI 端口"
 
 up:
 	$(COMPOSE) up -d --build
@@ -69,3 +70,6 @@ flink-test:
 
 kafka-test:
 	docker exec -it kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+
+ds-test:
+	docker exec dolphinscheduler bash -c 'timeout 5 bash -c "echo > /dev/tcp/localhost/12345" && echo "DolphinScheduler UI is up: http://localhost:12345/dolphinscheduler/ui"'

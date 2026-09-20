@@ -1,7 +1,7 @@
 # 大数据开发环境（Windows / Docker Desktop 版）
 
 面向 **Windows 10/11 + Docker Desktop（WSL2 后端）** 的一键大数据开发环境，
-包含 **Hadoop、Hive、Spark、Flink、Kafka、Hudi**。
+包含 **Hadoop、Hive、Spark、Flink、Kafka、Hudi、DolphinScheduler**。
 
 > 本工程同样适用于 Linux / macOS，只需把 `.ps1` / `.bat` 换成 `make` 命令即可。
 
@@ -15,7 +15,8 @@
 | Hudi    | 0.14.1          | `hudi-spark3.4-bundle_2.12`（Spark 3.4.x / Scala 2.12）  |
 | Flink   | 1.18.1          | JobManager + TaskManager                                |
 | Kafka   | 3.7.0           | KRaft 模式（无需 ZooKeeper）                            |
-| Postgres| 15              | Hive Metastore 元数据库                                 |
+| Postgres| 15              | Hive Metastore + DolphinScheduler 元数据库             |
+| DolphinScheduler | 3.2.2 | Standalone 单机版（内置 ZK），元数据存 PostgreSQL，可调度本环境组件 |
 
 ## Windows 前置条件
 
@@ -35,7 +36,8 @@
    docker compose version
    ```
 
-> **WSL2 内存注意**：整套环境约需 8~12 GB 内存。若主机内存不足，可在
+> **WSL2 内存注意**：整套环境约需 10~14 GB 内存（含 DolphinScheduler 约 +2 GB）。
+> 若主机内存不足，可在
 > `hadoop/conf/yarn-site.xml`、`spark/conf/spark-defaults.conf`、
 > `flink/conf/flink-conf.yaml` 下调各组件内存。
 
@@ -63,10 +65,13 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1
 | `postgres:15` | `docker.1ms.run/postgres:15` |
 | `flink:1.18.1-scala_2.12-java8` | `docker.1ms.run/flink:1.18.1-scala_2.12-java8` |
 | `apache/kafka:3.7.0` | `docker.1ms.run/apache/kafka:3.7.0` |
-| `eclipse-temurin:8-jdk-jammy`（Hadoop/Spark 基础镜像） | `docker.1ms.run/eclipse-temurin:8-jdk-jammy` |
+| `apache/dolphinscheduler-standalone-server:3.2.2` | `docker.1ms.run/apache/dolphinscheduler-standalone-server:3.2.2` |
+| `apache/dolphinscheduler-tools:3.2.2` | `docker.1ms.run/apache/dolphinscheduler-tools:3.2.2` |
+| `eclipse-temurin:8-jdk-jammy`（Hadoop/Spark 基础镜像） | `docker.1ms.run/eclipse-temurin:8-jdk-jammy`（DolphinScheduler 官方基础镜像 `eclipse-temurin:8-jdk` 走 Docker Hub，国内网络通常可直连，故未替换） |
 | `apache/hive:3.1.3`（Hive 基础镜像） | `docker.1ms.run/apache/hive:3.1.3` |
 
-> 说明：`bigdata/hadoop`、`bigdata/hive`、`bigdata/spark` 是本工程用 Dockerfile **本地构建**的镜像
+> 说明：`bigdata/hadoop`、`bigdata/hive`、`bigdata/spark`、`bigdata/dolphinscheduler`
+> 是本工程用 Dockerfile **本地构建**的镜像
 > （由 `docker compose build` 生成，不经过 registry 拉取），因此不加前缀；它们的基础镜像
 > （eclipse-temurin / apache/hive）已使用镜像加速。
 
@@ -113,6 +118,7 @@ powershell -ExecutionPolicy Bypass -File .\stop.ps1 -Clean
 | HiveServer2          | http://localhost:10002        | HiveServer2 Web          |
 | Kafka                | localhost:9092                | Broker（客户端接入）     |
 | PostgreSQL           | localhost:5432                | 元数据库                 |
+| DolphinScheduler     | http://localhost:12345/dolphinscheduler/ui | 任务调度平台（见下文） |
 
 ## JDBC / 客户端连接信息
 
@@ -133,13 +139,14 @@ powershell -ExecutionPolicy Bypass -File .\stop.ps1 -Clean
 
 用户名任意（如 `root`），密码留空。
 
-### PostgreSQL 15（Hive 元数据库）
+### PostgreSQL 15（Hive / DolphinScheduler 元数据库）
 
 | 场景     | 连接信息                                        |
 |----------|-------------------------------------------------|
 | JDBC     | `jdbc:postgresql://localhost:5432/metastore`   |
 | 超级用户 | `admin` / `admin123`（同 `.env`）               |
 | 业务用户 | `hive` / `hive123`（metastore 库属主）          |
+| DS 元数据 | 库 `dolphinscheduler`，用户 `dolphinscheduler` / `.env` 里的 `DS_DB_PASS` |
 
 ### HDFS（Hadoop 3.3.6）
 
@@ -171,6 +178,38 @@ powershell -ExecutionPolicy Bypass -File .\stop.ps1 -Clean
 | 容器网络内      | `kafka:9092`                                                 |
 | 宿主机客户端    | TCP `localhost:9092` 可通，但 advertised listener 为 `kafka:9092`，需在 `C:\Windows\System32\drivers\etc\hosts` 添加 `127.0.0.1 kafka` |
 | CLI             | `docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list` |
+
+### DolphinScheduler 3.2.2（Standalone）
+
+| 场景             | 信息                                                          |
+|------------------|---------------------------------------------------------------|
+| Web UI           | `http://localhost:12345/dolphinscheduler/ui`                  |
+| 默认账号         | `admin` / `dolphinscheduler123`（登录后请改密码）             |
+| 元数据库         | postgres 容器 `dolphinscheduler` 库（自动创建并建表）         |
+| REST API         | `http://localhost:12345/dolphinscheduler`                     |
+| 容器网络内地址   | `dolphinscheduler:12345`；Hive 数据源填 `hive-server:10000`  |
+
+**零手工初始化**：`ds-db-init`（幂等建库/角色）→ `ds-schema-init`
+（官方 `upgrade-schema.sh` 建表）→ `dolphinscheduler` 按依赖顺序自动执行，
+即使 PostgreSQL 数据卷早于 DolphinScheduler 存在也能正常补齐。
+
+**调度本环境组件**：standalone 镜像内置 ZooKeeper（无需外部注册中心）；
+`dolphinscheduler` 容器已挂载 `docker.sock` 并安装了 docker CLI（见
+`dolphinscheduler/Dockerfile`），因此在 **Shell 任务** 里可以直接提交作业：
+
+```bash
+# 示例：跑一个 Spark 作业（容器名即本环境的 spark-master）
+docker exec spark-master spark-submit --master spark://spark-master:7077 \
+  --class org.apache.spark.examples.SparkPi /opt/spark/examples/jars/spark-examples_2.12-3.4.3.jar 10
+```
+
+同理可写 `docker exec hive-server beeline -u "jdbc:hive2://hive-server:10000/" -e "..."`
+或 `docker exec flink-jobmanager flink run ...`。Hive/Spark 的 SQL 类任务也可
+用 DS 自带的 Hive / Spark 数据源 + SQL 节点（ JDBC 走容器网络）。
+
+> 注意：挂载 `docker.sock` 等于给该容器宿主机 Docker 的控制权，仅限本地开发环境。
+> 另外 DS 的 Spark/Flink 原生任务类型需要 worker 内有对应客户端，本环境推荐走
+> Shell + `docker exec` 方式；若坚持使用原生节点，可自建镜像把 spark/flink 客户端 COPY 进去。
 
 ## 常用操作（在 PowerShell / CMD 中执行）
 
@@ -348,7 +387,8 @@ bigdata-docker-env/
 ├── hive/                     # Hive 镜像 + hive-site.xml + entrypoint
 ├── spark/                    # Spark 镜像 + 配置 + entrypoint
 ├── flink/conf/               # flink-conf.yaml
-├── init/                     # 初始化脚本（Postgres / HDFS / Kafka）
+├── dolphinscheduler/         # DS 镜像（standalone + docker CLI）Dockerfile
+├── init/                     # 初始化脚本（Postgres / HDFS / Kafka / DS 建库）
 └── sql/                      # Hudi 示例 SQL
 ```
 

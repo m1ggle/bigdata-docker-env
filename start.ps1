@@ -50,6 +50,7 @@ Write-Host "  Spark Master         http://localhost:8080"
 Write-Host "  Spark History        http://localhost:18080"
 Write-Host "  Flink Dashboard      http://localhost:8082"
 Write-Host "  HiveServer2          http://localhost:10002"
+Write-Host "  DolphinScheduler     http://localhost:12345/dolphinscheduler/ui  (admin / dolphinscheduler123)"
 Write-Host ""
 Write-Host "Stop:  docker compose down" -ForegroundColor Yellow
 Write-Host "Clean: docker compose down -v" -ForegroundColor Yellow
